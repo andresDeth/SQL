@@ -42,14 +42,14 @@
    CREATE DATABASE InMemoryExampleDB
    ON
    PRIMARY(NAME=N'InMemoryExample_dataDB',
-   FILENAME = N'/var/opt/mssql/data/InMemoryExample_dataDB.mdf', size=128MB),
+   FILENAME = N'c:\data\InMemoryExample_dataDB.mdf', size=128MB),
               FILEGROUP[InMemoryExample_mod_fg1] CONTAINS MEMORY_OPTIMIZED_DATA
               (NAME= [InMemoryExample_mod_dir1],
-   FILENAME = N'/var/opt/mssql/data/InMemoryExample_mod_dir1'),
+   FILENAME = N'c:\data\InMemoryExample_mod_dir1'),
    (NAME= [InMemoryExample_mod_dir2],
-   FILENAME=N'/var/opt/mssql/data/InMemoryExample_mod_dir2')
+   FILENAME=N'c:\data\InMemoryExample_mod_dir2')
    LOG ON(name = [InMemoryExample_log1],
-   FILENAME=N'/var/opt/mssql/data/InMemoryExample.ldf', size=64MB)
+   FILENAME=N'c:\data\InMemoryExample.ldf', size=64MB)
    GO
 
 -- [3] TRANSACTION ISOLATION LEVEL 
@@ -81,7 +81,7 @@
    El aislamiento de instantáneas debe habilitarse estableciendo la opción de base de datos ALLOW_SNAPSHOT_ISOLATION ON antes de que se use en las transacciones. 
    Esto activa el mecanismo para almacenar las versiones de fila en la base de datos temporal ( tempdb ).
 */
-   ALTER DATABASE InMemoryExample1
+   ALTER DATABASE InMemoryExampleDB
    SET ALLOW_SNAPSHOT_ISOLATION ON;
    GO
  
@@ -114,7 +114,7 @@
 
 -- [4] Cuando configure una base de datos para tablas optimizadas para la memoria en SQL Server 2014, 
 --     se recomienda habilitar la configuración SET MEMORY_OPTIMIZED_ELEVATE_TO_SNAPSHOT:
-   ALTER DATABASE InMemoryExample1
+   ALTER DATABASE InMemoryExampleDB
    SET MEMORY_OPTIMIZED_ELEVATE_TO_SNAPSHOT ON;
    GO
 
@@ -159,7 +159,7 @@
 		 A diferencia del modelo de recuperación completa, en el modelo de registro masivo puede restaurar solo hasta el final de cualquier copia de seguridad; 
 		 no puedes restaurar en algún punto en el tiempo.
 */
-    ALTER DATABASE InMemoryExample1 SET RECOVERY SIMPLE WITH NO_WAIT
+    ALTER DATABASE InMemoryExampleDB SET RECOVERY SIMPLE WITH NO_WAIT
 	GO	
 
 /* [6] Listamos los Procedimientos Almacenados Compilados Nativamente */
@@ -171,6 +171,12 @@
 /* [7] CREACIÓN DE LA TABLA EN MEMORIA 
        Un valor incorrecto de BUCKET_COUNT, especialmente si es demasiado bajo, puede afectar significativamente el rendimiento
 	   de la carga de trabajo, así como afectar el tiempo de recuperación de la base de datos. Es mejor sobrestimar el número de depósitos.
+
+	   BUCKET_COUNT es crucial para lograr un rendimiento óptimo del índice Hash  y, al configurarlo, debes tener en cuenta los siguientes factores:
+
+	   - El número total de valores de columna de clave de índice.
+	   - La relación del número total de valores de columna de clave de índice únicos a duplicados.
+	   - El crecimiento futuro proyectado de la mesa.
 
 	   - INDICES, INDICES HASH
 
@@ -198,10 +204,10 @@
 */
    CREATE TABLE T1
    (
-     [Name] VARCHAR(32) NOT NULL PRIMARY KEY NONCLUSTERED HASH WITH(BUCKET_COUNT=100000),
-     [City] VARCHAR(32) NOT NULL,
-     [State_Province] VARCHAR(32) NOT NULL,
-     [LastModified] DATETIME NOT NULL,
+     [Name] NVARCHAR(32) COLLATE Latin1_General_100_BIN2 NOT NULL PRIMARY KEY NONCLUSTERED HASH WITH(BUCKET_COUNT=3000000),
+     [City] NVARCHAR(32) COLLATE Latin1_General_100_BIN2 NOT NULL,
+     [State_Province] NVARCHAR(32) COLLATE Latin1_General_100_BIN2 NOT NULL,
+     [LastModified] DATETIME NOT NULL
   
      INDEX T1_ndx_c2c3 NONCLUSTERED([City],[State_Province])
    ) WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_AND_DATA)
@@ -249,25 +255,23 @@
 */
     CREATE PROCEDURE dbo.p1	
 	WITH NATIVE_COMPILATION, SCHEMABINDING, EXECUTE AS OWNER
-	AS
-		BEGIN ATOMIC
-			WITH (TRANSACTION ISOLATION LEVEL = snapshot, LANGUAGE = N'us_english')
+	AS BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = snapshot, LANGUAGE = N'us_english')
 			DECLARE @name VARCHAR(32) = 'Mustaine'
 			DECLARE @i INT =0
 				WHILE @i <100
 				BEGIN
 					SET @name = 'Mustaine' + '_'+ CAST(@i AS VARCHAR);
 					INSERT dbo.T1
-					VALUES(@name, @name,@name)
+					VALUES(@name, @name,@name, GETDATE())
 					SET @i = @i - 1
 				END
 		END
 
 		INSERT INTO T1
-		VALUES ('Da vinci','Vinci','FL');
+		VALUES ('Da vinci','Vinci','FL', GETDATE());
 
 		INSERT INTO T1
-		VALUES ('Botticelli','Florence','FL');
+		VALUES ('Botticelli','Florence','FL', GETDATE());
 
 		SELECT *
 		FROM T1
@@ -319,7 +323,7 @@
    https://docs.microsoft.com/en-us/sql/relational-databases/in-memory-oltp/defining-durability-for-memory-optimized-objects?view=sql-server-2017
 */
 /* [11] CREACIÓN DE TABLA EN MEMORIA */
-CREATE TABLE bigtable_inmem(
+   CREATE TABLE bigtable_inmem(
 	 Id UNIQUEIDENTIFIER NOT NULL
 	 CONSTRAINT pk_biggerbigtable_inmem PRIMARY KEY NONCLUSTERED
      HASH WITH(BUCKET_COUNT = 2097152), 
@@ -439,7 +443,7 @@ CREATE TABLE bigtable_tsql(
    EXEC ins_bigtable @rows_to_INSERT = 200000;
 
 -- Modo Nativo - Inserta a una tabla en memoria desde un procedimiento NATIVO - 300mil registros en cero segundos
-   EXEC ins_native_bigtable @rows_to_INSERT = 3000000; -- Con 10millones la memoria ram de 5GB no alcanza
+   EXEC ins_native_bigtable @rows_to_INSERT = 500000; -- Con 10millones la memoria ram de 5GB no alcanza
 
 /* [16] CONSULTAMOS TABLA TRADICIONAL EN DISCO */
     SELECT * FROM bigtable_tsql; 
@@ -457,10 +461,77 @@ CREATE TABLE bigtable_tsql(
 /* [20] CONSULTAMOS ESTRUCTURAS DE LAS TABLAS */
    SELECT * FROM sys.tables;
 
------------------------------------------------------
--- COLUMN STORE
------------------------------------------------------
+/*-----------------------------------------------------
+  COLUMN STORE
+  -----------------------------------------------------
+  Columnstore Index
+  Un índice Columnstore permite almacenar, recuperar y manipular datos para análisis operativos utilizando el formato de datos en columnas.
+  Los datos se almacenan físicamente en formato de datos a modo de columna en lugar de en formato de fila normal. Columnstore le permite ejecutar
+  análisis performant en tiempo real en una carga de trabajo OLTP. Las tablas OLTP en memoria admiten la creación de índices Columnstore. 
+  Para obtener información detallada, le recomendamos que lea Columnstore Indexes Overview .
 
+  Características del índice Columnstore:
+
+  * Tamaño : el índice Columnstore está esencialmente en efecto, una copia física secundaria de la tabla, en formato de datos columnares. 
+    La estructura física original optimizada para la memoria orientada a filas sigue siendo la misma que para las operaciones OLTP.
+
+  * Durabilidad : a diferencia de los índices Hash  y Nonclustered, los índices Columnstore se registran. Conservan una copia en el disco y 
+    no se vuelven a crear en el inicio. Esto ayuda al tiempo de recuperación de la base de datos.
+
+  Los índices Columnstore son el estándar para almacenar y consultar grandes tablas de datos de almacenamiento de datos. 
+  Utiliza el almacenamiento de datos basado en columnas y el procesamiento de consultas para lograr aumentos de rendimiento de consultas de hasta 10x 
+  en su depósito de datos sobre el almacenamiento tradicional orientado a filas, y hasta 10x de compresión de datos sobre el tamaño de datos sin comprimir. 
+  
+  IMPORTANTE 
+  * A partir de SQL Server 2016 (13.x), los índices de almacén de columnas permiten el análisis operativo, la capacidad de ejecutar análisis en tiempo real
+    en una carga de trabajo transaccional.
+
+  ¿Por qué debería usar un índice de almacén de columnas?
+
+     - Un índice de almacén de columnas puede proporcionar un nivel muy alto de compresión de datos, generalmente 10x, 
+	   para reducir significativamente el costo de almacenamiento de su almacén de datos. Además, para análisis, ofrecen un orden de magnitud 
+	   mejor rendimiento que un índice btree. Son el formato de almacenamiento de datos preferido para el almacenamiento de datos y las cargas de trabajo analíticas. 
+	   Comenzando con SQL Server 2016 (13.x), puede usar índices de almacén de columnas para análisis en tiempo real en su carga de trabajo operacional.
+
+     * Razones por las que los índices de las columnas son tan rápidos:
+
+     - Las columnas almacenan valores del mismo dominio y comúnmente tienen valores similares, lo que resulta en altas tasas de compresión. 
+	   Esto minimiza o elimina el cuello de botella IO en su sistema al tiempo que reduce significativamente la huella de memoria.
+
+     - Las altas tasas de compresión mejoran el rendimiento de las consultas al usar una huella más pequeña en la memoria. A su vez, el rendimiento 
+	   de las consultas puede mejorar porque SQL Server puede realizar más operaciones de consultas y datos en la memoria.
+
+     - La ejecución por lotes mejora el rendimiento de las consultas, generalmente de 2 a 4 veces, al procesar múltiples filas juntas.
+
+     - Las consultas a menudo seleccionan solo unas pocas columnas de una tabla, lo que reduce la E / S total de los medios físicos.
+
+     ¿Cómo elijo entre un índice de almacén de filas y un índice de almacén de columnas?
+   
+     Los índices de almacén de filas funcionan mejor en consultas que buscan en los datos, buscando un valor particular o para consultas en un rango
+	 pequeño de valores. Utilice índices de almacén de filas con cargas de trabajo transaccionales, ya que tienden a requerir principalmente búsquedas
+	 de tabla en lugar de escaneos de tabla.
+
+     Los índices Columnstore proporcionan ganancias de alto rendimiento para consultas analíticas que escanean grandes cantidades de datos, 
+	 especialmente en tablas grandes. Utilice los índices de almacén de columnas en las cargas de trabajo analíticas y de almacenamiento de datos, 
+	 especialmente en tablas de hechos, ya que tienden a requerir escaneos completos de tablas en lugar de búsquedas de tablas.
+
+  - Índices OLTP en memoria
+  https://blogs.msdn.microsoft.com/sqlserverstorageengine/2017/11/02/in-memory-oltp-indexes-part-1-recommendations/
+
+  - Columnstore indexes
+  https://docs.microsoft.com/en-us/sql/relational-databases/indexes/columnstore-indexes-overview?view=sql-server-2017
+  */
+
+
+CREATE TABLE t_account (  
+    accountkey int NOT NULL PRIMARY KEY NONCLUSTERED,  
+    Accountdescription nvarchar (50),  
+    accounttype nvarchar(50),  
+    unitsold int,  
+    INDEX t_account_cci CLUSTERED COLUMNSTORE  
+    )  
+    WITH (MEMORY_OPTIMIZED = ON );  
+GO  
 --CREATE TABLE dbo.charge_cs
 --(
 -- [charge_no] int IDENTITY(1,1) NOT NULL,
@@ -570,9 +641,7 @@ CREATE TABLE bigtable_tsql(
 --GO
 
 --CREATE TABLE bigtable_inmem(
--- id uniqueidentifier not null
--- hash with(bucket_count=2097152), 
- 
+-- id uniqueidentifier not null hash with(bucket_count=2097152), 
 -- account_id int not null,
 -- trans_type_id smallint not null,
 -- shop_id int not null,
@@ -587,6 +656,21 @@ CREATE TABLE bigtable_tsql(
 -- 	--	(trans_made, shop_id, account_id)
 -- 	--	with(bucket_count = 2097152))
 --		 )WITH(MEMORY_OPTIMIZED = ON);
+
+	CREATE TABLE bigtable_inmem(
+		 Id UNIQUEIDENTIFIER NOT NULL
+		 CONSTRAINT pk_biggerbigtable_inmem PRIMARY KEY NONCLUSTERED
+		 HASH (Id) WITH(BUCKET_COUNT = 2097152), 
+ 
+		 account_id INT NOT NULL,
+		 trans_type_id SMALLINT NOT NULL,
+		 shop_id INT NOT NULL,
+		 trans_made DATETIME NOT NULL,
+		 trans_amount DECIMAL(20,2) NOT NULL,
+		 entry_date DATETIME2 NOT NULL DEFAULT(current_timestamp)
+		 INDEX Employees_IMCCI COLUMNSTORE(Id,account_id,trans_type_id,shop_id,trans_made,trans_amount,entry_date)) 
+		 WITH(MEMORY_OPTIMIZED = ON, DURABILITY=SCHEMA_ONLY);
+		 GO
 
 
 --CREATE TABLE dbo.bigtable_inmem(
@@ -611,5 +695,5 @@ CREATE TABLE bigtable_tsql(
 --   ETLLoadID int NULL,
 --   LoadDate datetime NULL,
 --   UpdateDate datetime NULL,
---   INDEX t_account_cci CLUSTERED COLUMNSTORE -- Indice columnar
---   ) WITH(MEMORY_OPTIMIZED = ON)
+--   INDEX t_account_cci CLUSTERED COLUMNSTORE)
+--   WITH(MEMORY_OPTIMIZED = ON)
