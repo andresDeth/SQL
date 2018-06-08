@@ -461,14 +461,21 @@ CREATE TABLE bigtable_tsql(
 /* [20] CONSULTAMOS ESTRUCTURAS DE LAS TABLAS */
    SELECT * FROM sys.tables;
 
-/*-----------------------------------------------------
-  COLUMN STORE
-  -----------------------------------------------------
+  DROP TABLE dbo.bigtable_inmem;
+  DROP PROCEDURE ins_native_bigtable; 
+
+/*----------------------------------------------------------------------------------------------------------
+  COLUMN STORE --> Los índices ColumnStore se pueden usar en las tablas In-memory / desde SQL Server 2016.
+  ----------------------------------------------------------------------------------------------------------
   Columnstore Index
   Un índice Columnstore permite almacenar, recuperar y manipular datos para análisis operativos utilizando el formato de datos en columnas.
   Los datos se almacenan físicamente en formato de datos a modo de columna en lugar de en formato de fila normal. Columnstore le permite ejecutar
   análisis performant en tiempo real en una carga de trabajo OLTP. Las tablas OLTP en memoria admiten la creación de índices Columnstore. 
   Para obtener información detallada, le recomendamos que lea Columnstore Indexes Overview .
+
+  Los índices de almacén de columnas pueden alcanzar tasas de compresión más altas que los índices tradicionales. 
+  Las tasas de compresión más altas se traducen en un mejor rendimiento, ya que los datos comprimidos significan una huella más pequeña en la memoria. 
+  Esto permite que se retengan más datos en la memoria y, en consecuencia, reduce la E / S del disco .
 
   Características del índice Columnstore:
 
@@ -485,6 +492,12 @@ CREATE TABLE bigtable_tsql(
   IMPORTANTE 
   * A partir de SQL Server 2016 (13.x), los índices de almacén de columnas permiten el análisis operativo, la capacidad de ejecutar análisis en tiempo real
     en una carga de trabajo transaccional.
+
+  * Los índices del Almacén de Columnas son los mejores para las cargas de trabajo del almacén de datos que consisten principalmente en 
+    consultas de solo lectura que analizan grandes conjuntos de datos agregados. Este tipo de consultas generalmente requieren escaneos 
+	completos de tabla o índice para recuperar la información necesaria. 
+	
+  * Los índices de almacén de columnas proporcionan poca ventaja a las consultas que dependen de operaciones de búsqueda para localizar información específica.
 
   ¿Por qué debería usar un índice de almacén de columnas?
 
@@ -514,6 +527,15 @@ CREATE TABLE bigtable_tsql(
      Los índices Columnstore proporcionan ganancias de alto rendimiento para consultas analíticas que escanean grandes cantidades de datos, 
 	 especialmente en tablas grandes. Utilice los índices de almacén de columnas en las cargas de trabajo analíticas y de almacenamiento de datos, 
 	 especialmente en tablas de hechos, ya que tienden a requerir escaneos completos de tablas en lugar de búsquedas de tablas.
+
+	 COMPARATIVA SQL SERVER 2012 - 2014
+	 
+	 Los índices de Columnstore, incluidos en la primera versión de SQL Server 2012 Enterprise Edition, eran índices de solo lectura, 
+	 lo que requiere eliminar el índice cada vez que necesitamos cargar los datos. En SQL Server 2014, los índices Columnstore se mejoran 
+	 para que sean índices totalmente legibles y modificables. 
+	 
+	 Incluyen la capacidad de crear un índice Clustered Columnstore a partir de esa versión de SQL Server, lo que permite que el índice
+	 almacene todos los datos en él, en lugar de depender de datos de filas.
 
   - Índices OLTP en memoria
   https://blogs.msdn.microsoft.com/sqlserverstorageengine/2017/11/02/in-memory-oltp-indexes-part-1-recommendations/
@@ -672,6 +694,26 @@ GO
 		 WITH(MEMORY_OPTIMIZED = ON, DURABILITY=SCHEMA_ONLY);
 		 GO
 
+		 CREATE TABLE [dbo].[EmployeesWithInMemoryClusteredColumnstoreIndex](
+	[EmpID] [int] NOT NULL CONSTRAINT PK_Employees_EmpID PRIMARY KEY NONCLUSTERED HASH (EmpID) WITH (BUCKET_COUNT = 100000),
+	[EmpName] [varchar](50) NOT NULL,
+	[EmpAddress] [varchar](50) NOT NULL,
+	[EmpDEPID] [int] NOT NULL,
+	[EmpBirthDay] [datetime] NULL,
+INDEX Employees_IMCCI CLUSTERED COLUMNSTORE
+) WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_AND_DATA)
+GO
+
+CREATE TABLE tbl_my_InMemory_CCI (  
+    my_Identifier INT NOT NULL PRIMARY KEY NONCLUSTERED,  
+    Account NVARCHAR (100),  
+    AccountName NVARCHAR(50),  
+    ProductID INT,
+    Quantity INT,  
+    INDEX account_Prod_CCI CLUSTERED COLUMNSTORE  
+    )  
+    WITH (MEMORY_OPTIMIZED = ON);  
+GO
 
 --CREATE TABLE dbo.bigtable_inmem(
 --   OnlineSalesKey int NOT NULL PRIMARY KEY NONCLUSTERED,
@@ -697,3 +739,4 @@ GO
 --   UpdateDate datetime NULL,
 --   INDEX t_account_cci CLUSTERED COLUMNSTORE)
 --   WITH(MEMORY_OPTIMIZED = ON)
+
